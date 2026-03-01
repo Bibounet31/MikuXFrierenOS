@@ -81,7 +81,8 @@ download() {
     log "checking latest firmware version..."
     fw_ver=$(echo -e "setimei ${imei}\nlist\nexit" | samloader3 -M "SM-G996B" -R "BOG" | grep "True" | grep -oP 'G\w+/\w+/\w+/\w+')
     log "downloading firmware version $fw_ver..."
-    echo -e "setimei ${imei}\ndownload $fw_ver -o $stock_dir/firmware.zip.enc4\nexit" | samloader3 -M "SM-G996B" -R "BOG"
+    echo -e "setimei ${imei}\ndownload $fw_ver --decrypt -o $stock_dir/firmware.zip.enc4\nexit" | samloader3 -M "SM-G996B" -R "BOG"
+    mv "$stock_dir/firmware.zip." "$stock_dir/firmware.zip" 2>/dev/null || true
     success "firmware downloaded to $stock_dir/"
 }
 # ===============================================================
@@ -117,6 +118,12 @@ check_dependencies() {
 
 extract() {
 	log "Extracting AP firmware...."
+
+	if [ -f "$stock_dir/firmware.zip" ]; then
+		log "unziping"
+		unzip -o "$stock_dir/firmware.zip" -d "$stock_dir/"
+	fi
+
 	ap_file=$(ls "$stock_dir"/AP_${firmware_version}_*.md5 2>/dev/null | head -1)
     	if [ -z "$ap_file" ]; then
         	error "AP firmware file not found in $stock_dir"
@@ -160,7 +167,7 @@ debloat() {
 	log "removing useless crap that samsung is paid for adding by default smh"
 	system_app="$work_dir/system_mount/system/app"
 	BLOAT=(
-	        "BlockchainBasicKit"
+	       "BlockchainBasicKit"
         	"KidsHome_Installer"
         	"MinusOnePage"
         	"Netflix_activationCommon"
