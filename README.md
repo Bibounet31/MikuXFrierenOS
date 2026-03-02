@@ -3,7 +3,7 @@ android 15/OneUI 7.0 based ROM for Galaxy S21+ Exynos (t2s) : Miku & Frieren the
 
 join our discord server for help & more infos - [Discord](https://discord.gg/7RgvyHrTWk)
 
-
+You can find the compiled version here [MikuXFrieren Website](chipicat.webhop.me)   -> link not up yet
 
 #Changelogs :
 
