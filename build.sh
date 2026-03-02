@@ -7,8 +7,18 @@
 # Author: Bibouwunet
 # ==================================================================
 
+# prevent the script from going if theres an error
+set -Eeuo pipefail
+trap 'echo -e "\n${RED}[✗] Error at line $LINENO${NC}"; exit 1' ERR
 
-set -e # stop if any error that would corrupt the file..
+
+sudo -v
+( while true; do
+    sleep 60
+    sudo -n true
+done ) & SUDO_KEEPALIVE_PID=$!
+
+trap 'kill $SUDO_KEEPALIVE_PID 2>/dev/null' EXIT
 
 
 # =================================================================
@@ -24,7 +34,7 @@ stock_dir="./stock"
 work_dir="./work"
 output_dir="./output"
 
-dependencies=("samloader3" "unlz4" "lz4" "simg2img" "img2simg" "lpunpack" "lpmake" "lpdump" "tar" "python3")
+dependencies=("e2fsck" "resize2fs" "samloader3" "unlz4" "lz4" "simg2img" "img2simg" "lpunpack" "lpmake" "lpdump" "tar" "python3" "unzip")
 
 imei="355399273528593"
 
@@ -47,15 +57,12 @@ warn()   { echo -e "${YELLOW}[!] $1${NC}"; }
 error()  { echo -e "${RED}[✗] $1${NC}"; exit 1; }
 # ================================================================
 
-
+ 
 
 # ===============================================================
 # SETUP
 
 setup() {
-	sudo -v
-	while true; do sudo -n true; sleep 60; kill -0 "$$" || exit; done 2>/dev/null &
-	
 	# check if theres enough space
 	free_space=$(df -BG . | awk 'NR==2 {gsub("G","",$4); print $4}')
 	if [ "$free_space" -lt 60 ]; then
@@ -82,7 +89,8 @@ download() {
     fw_ver=$(echo -e "setimei ${imei}\nlist\nexit" | samloader3 -M "SM-G996B" -R "BOG" | grep "True" | grep -oP 'G\w+/\w+/\w+/\w+')
     log "downloading firmware version $fw_ver..."
     echo -e "setimei ${imei}\ndownload $fw_ver --decrypt -o $stock_dir/firmware.zip.enc4\nexit" | samloader3 -M "SM-G996B" -R "BOG"
-    mv "$stock_dir/firmware.zip." "$stock_dir/firmware.zip" 2>/dev/null || true
+    mv "$stock_dir/firmware.zip." "$stock_dir/firmware.zip" || true
+    firmware_version=$(echo "$fw_ver" | cut -d'/' -f1)
     success "firmware downloaded to $stock_dir/"
 }
 # ===============================================================
@@ -97,8 +105,11 @@ check_dependencies() {
 	MISSING=()
 
 	for dep in "${dependencies[@]}";do
-		if ! command -v "$dep" &>/dev/null; then
+		if ! command -v "$dep"; then
 			MISSING+=("$dep")
+			if [ "$dep" = "samloader3" ] ; then
+				error "samloader3 is missing, install it with 'pipx install "git+https://github.com/martinetd/samloader" --python python3.12 && pipx inject samloader3 rich requests cryptography', THEN reboot ur shell"
+			fi
 		fi
 	done
 
@@ -124,7 +135,7 @@ extract() {
 		unzip -o "$stock_dir/firmware.zip" -d "$stock_dir/"
 	fi
 
-	ap_file=$(ls "$stock_dir"/AP_${firmware_version}_*.md5 2>/dev/null | head -1)
+	ap_file=$(ls "$stock_dir"/AP_${firmware_version}_*.md5 | head -1)
     	if [ -z "$ap_file" ]; then
         	error "AP firmware file not found in $stock_dir"
     	fi
@@ -194,6 +205,33 @@ debloat() {
 	done
 
 	success "Debloat complete"
+}
+
+# ===============================================================
+
+
+
+# ===============================================================
+# BUILD.PROPS 
+
+build_prop() {
+    log "disabling background crap"
+    PROP="$work_dir/system_mount/system/build.prop"
+
+    log "disabling system tracing daemon"
+    sudo sed -i 's/persist.traced.enable=1/persist.traced.enable=0/' "$PROP"
+    sudo sed -i 's/ro.build.version.incremental=G996BXXSJHZA6/ro.build.version.incremental=G996BXXSJHZA6-MikuXFrierenOS-v0.1/' "$PROP"
+    sudo sed -i 's/ro.build.display.id=AP3A.240905.015.A2.G996BXXSJHZA6/ro.build.display.id=MikuXFrierenOS-v0.1/' "$PROP"
+
+    log "disable samsung logging"
+    sudo sed -i 's/persist.log.semlevel=0xFFFFFF00/persist.log.semlevel=0x00000000/' "$PROP"
+    sudo sed -i 's/persist.log.level=0xFFFFFFFF/persist.log.level=0x00000000/' "$PROP"
+    echo "ro.config.nocheckin=true" | sudo tee -a "$PROP"
+    echo "profiler.force_disable_err_rpt=1" | sudo tee -a "$PROP"
+    echo "profiler.force_disable_ulog=1" | sudo tee -a "$PROP"
+    echo "ro.modversion=MikuXFrierenOS-v0.1" | sudo tee -a "$PROP"
+
+    success "build.prop tweaks done qwq"
 }
 
 # ===============================================================
@@ -275,16 +313,17 @@ clean() {
 # =========================================================
 # MAIN
 
-case "$1" in
-    setup)    setup && check_dependencies ;;
-    download) setup && download ;;
-    extract)  setup && extract ;;
-    mount)    mount_system ;;
-    debloat)  debloat ;;
-    unmount)  unmount_system ;;
-    repack)   repack ;;
+case "${1:-}" in
+    setup)    check_dependencies && setup ;;
+    download) check_dependencies && setup && download ;;
+    extract)  check_dependencies && setup && extract ;;
+    mount)    check_dependencies && mount_system ;;
+    debloat)  check_dependencies && debloat ;;
+    buildprop)  build_prop ;;
+    unmount)  check_dependencies && unmount_system ;;
+    repack)   check_dependencies && repack ;;
     clean)    clean ;;
-    all)      setup && download && extract && mount_system && debloat && unmount_system && repack ;;
+    all)      check_dependencies && setup && download && extract && mount_system && debloat && build_prop && unmount_system && repack && clean ;;
     *)
 
 
@@ -293,14 +332,16 @@ case "$1" in
         echo "  Usage: ./build.sh [command]"
         echo ""
         echo "  Commands:"
-	echo "    download  - Download stock firmware"
-        echo "    extract   - Extract AP firmware"
-        echo "    mount     - Mount system partition"
-        echo "    debloat   - Remove bloat apps"
-        echo "    unmount   - Unmount system partition"
-        echo "    repack    - Repack into flashable tar"
-        echo "    clean     - Clean work directory"
-        echo "    all       - Run everything at once"
+		echo "    setup      - create the necessary files" 
+		echo "    download   - Download stock firmware"
+        echo "    extract    - Extract AP firmware"
+        echo "    mount      - Mount system partition"
+        echo "    debloat    - Remove bloat apps"
+		echo "    buildprop  - Small ajustments to build.prop for 0.1 perf improvements"
+        echo "    unmount    - Unmount system partition"
+        echo "    repack     - Repack into flashable tar"
+        echo "    clean      - Clean work directory"
+        echo "    all        - Run everything at once"
         echo ""
         ;;
 esac
